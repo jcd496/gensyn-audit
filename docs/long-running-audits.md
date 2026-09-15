@@ -39,7 +39,7 @@ Every step needs its own claim.
 
 ## Memory and swap
 
-Measured in the first week of Open 1B audits, a step takes roughly:
+Observed runtimes for a step are roughly:
 
 | Machine                | Time per step   |
 |------------------------|-----------------|
@@ -51,14 +51,8 @@ There is no minimum spec. The point is that an audit is doable on ordinary
 hardware. Below about 40 GB of unified memory the replay lives in swap, so
 expect the long form. `doctor` warns about this rather than refusing.
 
-In that same week, two of three replays on 24 GB machines reported a hash that
-matched nothing, a different one each time. What caused those two divergences
-was not established. Nothing was measured that would separate a memory fault
-from nondeterminism, a software defect or another hardware problem, so this
-guide does not name a cause.
-
-What to do with a NO MATCH from a heavily swapping machine: reproduce it before
-reading it as a finding about the run. Re-run the same step on a machine with
+If a heavily swapping machine reports NO MATCH, reproduce it before reading it
+as a finding about the run. Re-run the same step on a machine with
 more memory, or have another auditor take it. A mismatch that reproduces is
 worth reporting as a divergence; one that does not is worth reporting too,
 with both hashes, so the failure can be understood. Do not discard either.

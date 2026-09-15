@@ -11,18 +11,11 @@ requires-python = ">=3.11,<3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    # A 31 KB C extension, and the only dependency. Checkpoint shards are
-    # composite objects for which GCS publishes no md5, so crc32c is the only
-    # checksum available for essentially the whole download; in pure Python it
-    # runs at ~20 MB/s and becomes the bottleneck instead of the network.
-    # gcs.py keeps a pure-Python fallback, so verification still works if this
-    # cannot be installed — it is just slow.
+    # Accelerates CRC32C verification; a pure-Python fallback remains available.
     "google-crc32c>=1.5",
 ]
 
 [project.scripts]
-# `audit` is taken: macOS ships /usr/sbin/audit, and shadowing a
-# system binary on the only supported platform is a bad default.
 gensyn-audit = "gensyn_audit.cli:main"
 
 [project.urls]

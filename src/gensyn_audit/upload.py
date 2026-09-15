@@ -56,8 +56,6 @@ def sidecar(result, bundle: Bundle, *, run_id: str | None = None) -> dict:
     what the verifier is configured with. The receipt's ``run`` is whatever the
     record was addressed by, and the API answers to the run's *name*
     (``open-1b``) as well, so a manifest-driven run carries the name there.
-    The first production hand-off was rejected ``bundle_invalid`` for exactly
-    that: a sidecar saying ``open-1b`` to a verifier expecting the id.
     """
     last = result.losses[-1] if result.losses else {}
     return {
@@ -227,10 +225,8 @@ def _resume_offset(session: str) -> int | None:
 
     A zero-length PUT with ``Content-Range: bytes */*`` to the session URI
     answers 308 with the committed range, or 200/201 once the object is
-    complete. It has to be the session URI: the signed URL is a POST
-    signature over ``x-goog-resumable``, and a PUT there is answered 400
-    ``MalformedSecurityHeader`` before anything is uploaded, which is how the
-    first production upload died with "could not query the upload's progress".
+    complete. It has to be the session URI: the signed URL authorizes only the
+    initial POST, and a PUT there is rejected before anything is uploaded.
 
     Returns the byte offset to continue from, -1 when the object is already
     complete, or None when the session is gone (expired, or never valid) and a

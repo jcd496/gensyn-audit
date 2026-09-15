@@ -66,9 +66,7 @@ def test_no_checksum_at_all_is_not_a_crash():
 
 
 def test_a_download_hashed_with_the_wrong_algorithm_would_be_caught():
-    """Regression: the digest used to be chosen before the response headers
-    arrived, so it hashed with md5 and compared against crc32c — every download
-    'failed' its checksum."""
+    """The response headers determine which checksum verifies the download."""
     data = b"payload"
     good = {"md5": hashlib.md5(data).digest()}
     gcs._verify(data, good, "gs://b/o")  # must not raise

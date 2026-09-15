@@ -1,10 +1,4 @@
-"""The memory check says what a machine is in for, not just whether it fits.
-
-OPEN-1B, first week: a 24 GB MacBook Pro passed preflight, then spent ~18 hours
-in swap on a step a 48 GB machine did in 6, and two of three such replays
-reported a hash that matched nothing -- differently each time. The check let
-that machine through without a word.
-"""
+"""The memory check reports runtime and swap risk without blocking capable machines."""
 
 from __future__ import annotations
 
@@ -36,9 +30,7 @@ def test_a_swapping_machine_is_told_the_hours_and_what_to_do_with_a_mismatch(mon
     assert "under an hour on an H100" in check.fix
     assert "NO MATCH" in check.fix
     assert "reproduce" in check.fix
-    # Two unrepeatable mismatches were observed; what caused them was not.
-    # The warning must not diagnose them, and must not tell an auditor that a
-    # mismatch from a small machine says nothing.
+    # Do not infer the cause or validity of a mismatch from memory pressure alone.
     assert "corruption" not in check.fix
     assert "not evidence" not in check.fix
 

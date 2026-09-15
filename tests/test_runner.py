@@ -79,13 +79,7 @@ def test_is_running_rejects_a_nonsense_pid():
     assert runner.is_running(-1) is False
 
 
-# ── when did a detached replay actually finish? ──────────────────────────────
-#
-# 2026-09-13, from the first failed OPEN-1B audit's investigation: both audits'
-# detached run.json carried a null `finished_at`, because `launch` returns as
-# soon as the child starts and nothing reaps it. Every consumer then filled the
-# gap with "now", so an overnight replay reported and submitted a runtime that
-# included the hours the machine spent idle waiting for its auditor.
+# ── infer when a detached replay finished ────────────────────────────────────
 
 import json
 import os
@@ -101,7 +95,7 @@ def _detached(tmp_path, *, pid: int, finished_at: str | None = None) -> tuple:
     wd = Workdir(tmp_path)
     wd.root.mkdir(parents=True, exist_ok=True)
     wd.log.write_text("2026-09-13 08:03:08,182 INFO pretrain.audit :: MATCH=False\n")
-    # 17h39m after the recorded start, as the real one was.
+    # Use a realistic long-running interval.
     finish = datetime.fromisoformat(STARTED).timestamp() + 17 * 3600 + 39 * 60
     os.utime(wd.log, (finish, finish))
     state = runner.RunState(

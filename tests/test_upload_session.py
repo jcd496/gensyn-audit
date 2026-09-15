@@ -1,12 +1,4 @@
-"""The resumable upload against a fake GCS: which URL gets asked what.
-
-The first production upload died on `could not query the upload's progress
-(400)`: the progress query went to the signed *start* URL, whose signature is
-over `x-goog-resumable` on a POST, and GCS answered MalformedSecurityHeader.
-Only the session URI from `Location` answers a status query. These tests hold
-the fake to the same rule, and check that a re-run resumes the session it
-opened rather than opening another and starting from byte 0.
-"""
+"""Resumable uploads query and resume through the GCS session URI."""
 
 from __future__ import annotations
 
@@ -69,7 +61,7 @@ class FakeGCS:
                 session = f"https://storage.example/session/{self.starts}"
                 self.sessions[session] = bytearray()
                 return _Ok(201, Location=session)
-            # The production failure: a PUT against the signed start URL.
+            # Status queries must use the session URI, not the signed start URL.
             raise _http_error(url, 400)
         if url not in self.sessions or url in self.dead:
             raise _http_error(url, 404)

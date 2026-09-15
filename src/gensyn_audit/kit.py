@@ -475,12 +475,8 @@ def find_base_interpreter() -> str | None:
     The published repop wheels are cp311, so 3.11 is not a preference. Prefer
     an explicit python3.11 on PATH, then our own interpreter when it is 3.11.
 
-    That second branch is not a fallback for tidiness: installed with
-    ``uv tool install --python 3.11``, the tool runs on 3.11 inside its own
-    environment and nothing named ``python3.11`` is on PATH at all. Doctor
-    used to look only at PATH, so the supported install blocked its own
-    preflight and told the reader to go and install Python by hand, which is
-    the thing uv was brought in to avoid.
+    With ``uv tool install --python 3.11``, the tool runs on 3.11 inside its
+    own environment even when nothing named ``python3.11`` is on PATH.
     """
     if found := shutil.which("python3.11"):
         return found

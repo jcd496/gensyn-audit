@@ -35,21 +35,8 @@ _MEMORY_HEADROOM = 1.35
 
 #: An interval replay's measured working set, when the trajectory does not say.
 _INTERVAL_MEMORY_GB = 24.0
-#: Below this an interval replay finishes but lives in swap. What that cost in
-#: the first week of OPEN-1B audits: ~18 h per step on a 24 GB MacBook Pro
-#: against ~6 h on 48 GB, and two of three 24 GB replays reported a hash that
-#: matched nothing, a different one each time. Why those two diverged was not
-#: established -- nothing was measured that would separate a memory fault from
-#: nondeterminism or a software defect -- so the warning asks for a second
-#: machine rather than naming a cause. Spelled out as a warning rather than a
-#: refusal because the point of the exercise is that it is possible on
-#: ordinary hardware.
-#:
-#: 40 rather than the 48 that was measured comfortable: the working set is
-#: ~24 GB plus headroom, and a 48 GB machine was well clear of swap, so the
-#: line sits at the point where the machine is plausibly still fitting the
-#: replay rather than at the one configuration known to. It is a guess at
-#: the knee, not a measurement, and moves when there is a measurement.
+#: Unified-memory threshold below which interval replays are likely to swap.
+#: Advisory only because lower-memory machines can still complete an audit.
 _INTERVAL_COMFORT_GB = 40.0
 _INTERVAL_TIMING = (
     "an audit step takes roughly 18 hours on a 24 GB MacBook Pro, "

@@ -152,7 +152,7 @@ def test_live_throttles_redraws():
 
 
 def test_an_init_unit_reports_its_real_phases():
-    """It used to read `starting up` for its entire 40-second life."""
+    """An init unit advances through each observable phase."""
 
     def phase_after(msg: str) -> str:
         return progress.parse(f"2026-09-07 10:00:00,000 INFO pretrain.audit :: {msg}\n").phase
@@ -310,9 +310,7 @@ def test_every_command_a_hint_names_actually_exists():
 
 
 def test_the_pulse_is_never_invisible():
-    """It used to slide off the end: one frame in every 36 rendered a bar with
-    no highlight at all, which on a silent phase is the single moment it must
-    not look stopped. (It also made the pulse test flaky.)"""
+    """Every animation frame includes the pulse highlight."""
     ui.set_plain(True)
     try:
         for tick in range(200):

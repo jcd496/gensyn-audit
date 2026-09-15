@@ -159,10 +159,7 @@ def test_an_init_unit_is_never_blocked():
 
 
 def test_the_override_reaches_the_download_not_just_the_preflight(tmp_path, monkeypatch):
-    """The fetch used to read the receipt directly, so --predecessor-uri changed
-    where the descriptor guard looked but not where the bytes came from: doctor
-    passed against the override and run then fetched from the record's dead
-    location anyway."""
+    """The predecessor override controls both validation and download."""
     import argparse
 
     from gensyn_audit import cli
@@ -220,11 +217,7 @@ def test_a_progress_bar_redraw_collapses_to_the_line_a_terminal_shows(tmp_path, 
 
 
 def test_a_redraw_group_is_scoped_by_the_line_it_redraws():
-    """Reading bytes to keep the bare \\r is what makes the collapse possible,
-    but it also hands back the two line endings read_text used to absorb: a
-    \\r group must not reach across the \\n that ends it, and a CRLF is an
-    ordinary line ending rather than a redraw of an empty line.
-    """
+    """A redraw group ends at a newline, and CRLF remains a normal line ending."""
     from gensyn_audit.cli import _terminal_lines
 
     assert _terminal_lines(b"a\rA\nb\rB\n") == ["A", "B"]
@@ -236,10 +229,7 @@ def test_a_redraw_group_is_scoped_by_the_line_it_redraws():
 
 
 def test_a_step_with_no_predecessor_yet_explains_rather_than_crashes():
-    """Position 2 of an open segment has no hand-off, so the record publishes
-    neither a predecessor URI nor a predecessor step. Both absences used to
-    crash: `checkpoint_uri(None)` formatted None with `:09d`, and `fetch` then
-    called `.startswith` on None."""
+    """A step awaiting hand-off has neither a predecessor URI nor step."""
     from gensyn_audit import cli
     from gensyn_audit.errors import AuditError
 

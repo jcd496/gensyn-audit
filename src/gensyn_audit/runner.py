@@ -466,15 +466,10 @@ def supervise(
 ) -> RunState:
     """Hand the rest of this audit to a detached copy of the tool.
 
-    The first detached design backgrounded only the replay and asked the
-    auditor to come back and re-run the same command to report and submit it.
-    Every tester tripped on that step: it is the one part of the flow that
-    cannot be inferred from watching the screen. So what detaches now is
-    `gensyn-audit run` itself -- `argv` is this invocation minus `--detach`,
-    plus the flag that tells the child it is the supervisor -- and the replay,
-    the verdict, the submission and the upload all happen in that process.
-    Nothing needs re-running unless it dies, in which case the old recovery
-    path (run the same command again) still works and is what `status` says.
+    The detached process handles the replay, verdict, submission, and upload.
+    `argv` is this invocation minus `--detach`, plus the flag that marks the
+    child as supervised. Re-running the same command remains the recovery path
+    if the child dies.
 
     It gets its own session, so closing the terminal or the SSH connection does
     not take it down, and it keeps this process's working directory, so every

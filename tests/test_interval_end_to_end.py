@@ -411,14 +411,7 @@ def test_a_bad_duration_says_what_it_wanted():
     assert "18h" in exc.value.hint, "the error must show the accepted forms"
 
 
-# ── the workdir must survive a re-invocation ─────────────────────────────────
-#
-# 2026-09-13, from the first failed OPEN-1B audit's investigation: `run` cleared
-# the offload scratch before it worked out whether it was going to replay at
-# all. On the documented "re-run to report and submit" path that deleted the
-# ~18 GB of spill which, on a mismatch, is the only diagnostic anyone has left;
-# and it ran before the live-pid refusal, so a second `run` against a replay in
-# progress deleted that replay's spill out from under it.
+# ── preserve workdir evidence when not starting a replay ─────────────────────
 
 
 def _spill(world) -> Path:
@@ -526,12 +519,7 @@ def test_a_real_replay_still_gets_the_headroom_checks(world, monkeypatch):
     assert seen == [True]
 
 
-# ── the runtime a detached audit reports and submits ─────────────────────────
-#
-# Same investigation: `launch` returns as soon as the child starts and nothing
-# reaps it, so a detached run.json keeps `finished_at: null` for good. The
-# report path then measured the replay against the moment the auditor came back
-# to look at it, and submitted that as the audit's runtime.
+# ── recover the runtime of a detached audit ──────────────────────────────────
 
 
 def _as_detached(world, *, started: str, finished_mtime: float) -> None:

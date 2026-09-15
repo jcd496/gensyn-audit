@@ -107,10 +107,8 @@ class Progress:
         The full digest reaches us only from the trailing JSON audit_replay
         prints on the success path. A mismatch raises before that block, so on
         the one outcome where the number is worth reading, all that survives is
-        the 16-hex prefix in the `state_hash=` log line. Reporting the prefix
-        beats reporting nothing: the first mismatch a tester hit was escalated
-        to a maintainer purely because the CLI showed `?` for a value that was
-        sitting in the log the whole time.
+        the 16-hex prefix in the `state_hash=` log line. Return that prefix
+        rather than hiding an available result.
         """
         return self.state_hash or self.state_hash_short
 

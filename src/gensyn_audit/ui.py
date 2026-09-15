@@ -253,9 +253,8 @@ class Activity:
 
     Packing an 18 GB hand-off, unpacking one, reconstructing its hash and
     digesting it each take minutes inside a subprocess that says nothing until
-    it is done. The first tester read that silence as a hang, twice. This keeps
-    the indeterminate bar moving from a thread while the caller blocks, and
-    leaves one line saying what happened and how long it took.
+    it is done. This keeps the indeterminate bar moving while the caller blocks
+    and leaves one line saying what happened and how long it took.
 
         with Activity("packing the hand-off"):
             convert.pack(...)

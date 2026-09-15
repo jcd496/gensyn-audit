@@ -1,19 +1,4 @@
-"""The two pieces of the flow the first testers tripped on.
-
-2026-09-12, OPEN-1B audit steps 101-103, from one tester's notes as they went:
-
-* "it finished and told me to re-run the same audit command ... we should
-  definitely streamline this UX under a single script call". `--detach` used to
-  background only the replay; reporting and submitting needed a second, manual
-  invocation of the same command.
-* "it looks like it's downloading the previous step (also performed by this
-  machine and obviously already stored locally)". Taking the next step fetched
-  the auditor's own upload straight back -- ~18 GB -- to arrive at bytes sitting
-  in the previous workdir.
-* "really long gap again where it looked like nothing was happening". The
-  re-run re-fetched, re-unpacked and re-verified the predecessor of a replay
-  that had already happened, all silently.
-"""
+"""Detached execution and reuse of locally produced predecessors."""
 
 from __future__ import annotations
 
@@ -135,11 +120,7 @@ def _finished_in(root: Path) -> None:
 
 
 def test_a_relative_workdir_lands_the_child_where_the_parent_staged(world, monkeypatch, capsys):
-    """The child used to re-resolve the `--workdir` token it was handed against
-    its own cwd. With that cwd being the workdir itself, it replayed in
-    `<wd>/<wd>`: a second download and gate of the predecessor, a full replay
-    the parent's `status` and `stop` could not see, and a receipt nowhere the
-    user would look."""
+    """The child uses the absolute workdir prepared by its parent."""
     monkeypatch.chdir(world["workdir"].parent)
     code = _run_without_workdir(world, "--workdir", "rel-wd", "--detach", "--claim", "clm_rel")
     assert code == 0
@@ -192,12 +173,7 @@ def test_the_claim_reaches_the_child_without_touching_its_argv_or_the_log(world,
 
 
 def test_the_parent_cannot_overwrite_the_replay_pid_the_child_records(world, tmp_path, monkeypatch):
-    """Reproduced on review: the parent's `run.json` write used to race the
-    child's. A parent that was slow to write landed `pid 0` on top of the
-    live replay pid, `status` said "preparing" against a running replay, and
-    `stop` could not find it. The child now waits on the hand-off pipe, which
-    the parent closes only after its write, so a slow parent slows the child
-    rather than erasing what it wrote."""
+    """The child records its replay pid only after the parent's state write."""
     venv_bin = next((tmp_path / "cache").rglob("bin"))
     (venv_bin / "pretrain-audit-replay").write_text("#!/bin/sh\nsleep 60\n")
     (venv_bin / "pretrain-audit-replay").chmod(0o755)
@@ -223,8 +199,7 @@ def test_the_parent_cannot_overwrite_the_replay_pid_the_child_records(world, tmp
 
 
 def test_the_supervised_child_does_not_stage_the_predecessor_again(world, monkeypatch):
-    """The parent fetched and gated it moments ago; doing it twice is the gap
-    the tester saw. The child reads the saved verdict instead."""
+    """The child reuses the predecessor verdict saved by its parent."""
     calls = []
     monkeypatch.setattr(cli, "_stage_predecessor", lambda *a, **k: calls.append("stage"))
     monkeypatch.setattr(cli, "_verify_predecessor", lambda *a, **k: calls.append("gate"))

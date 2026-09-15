@@ -1,17 +1,4 @@
-"""What a packed hand-off must SAY while it downloads.
-
-An auditor watching `gensyn-audit run` cannot tell a slow multi-gigabyte
-transfer from a hung process, so silence on the transport path is not cosmetic:
-it is the one failure mode where the correct action (wait) and the wrong one
-(kill it and start over) look identical. The packed branch used to print
-nothing at all, not even the URI it was reading, while the directory branch
-beside it drew a bar with bytes, a rate and an estimate.
-
-These pin the reporting rather than the transfer. The bar itself only redraws
-on a terminal, so what is asserted here is the part that holds everywhere: the
-source is named before the bytes move, a progress callback reaches gcs, and the
-size is stated when it lands.
-"""
+"""A packed hand-off reports its source and progress while downloading."""
 
 from __future__ import annotations
 

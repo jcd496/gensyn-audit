@@ -594,12 +594,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     plan.workdir.create()
     verdict = None
 
-    # Decide what this invocation IS before touching anything in the workdir.
-    # `_completed_replay` also refuses a workdir whose replay is still live, and
-    # the scratch clear below used to run first: re-running `run` while a replay
-    # was going deleted its offload spill out from under it, and re-running
-    # after one finished -- the documented way to report and submit -- deleted
-    # the ~18 GB of spill that is the only diagnostic left of a failed replay.
+    # Determine whether this invocation will replay before modifying the workdir.
+    # Live replays and diagnostics from completed replays must keep their spill.
     prior = _completed_replay(plan)
     replaying = prior is None or args.restart
 
@@ -608,10 +604,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     echo()
     _provision(plan, k)
 
-    # Before the disk check, not after: a spill from a previous attempt would
-    # otherwise fail the preflight it is itself the cause of. Only when we are
-    # actually going to replay -- the spill belongs to the run we are about to
-    # report otherwise.
+    # Clear stale spill before the disk check, but only when starting a replay.
     if replaying and (freed := plan.workdir.clear_scratch()):
         echo(
             paint(
@@ -627,13 +620,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             echo(paint("Re-run with --skip-doctor to start anyway.", "dim"))
             return EXIT_ERROR
 
-    # The predecessor is fetched and gated only when a replay is about to start
-    # from it. The report path used to do both again -- a second download of
-    # a bundle this machine may have produced, then a second unpack and hash
-    # reconstruction -- to report a replay that had already happened. That was
-    # most of the "long gap where nothing seemed to be happening" the first
-    # tester hit on the re-run. A supervised child skips them too: its parent
-    # ran them moments ago and left the verdict in `predecessor.json`.
+    # Fetch and gate the predecessor only when starting a replay. A supervised
+    # child reuses the verdict its parent saved in `predecessor.json`.
     prepared = _prepared_checkpoint(plan.workdir) if args.supervised else None
     if plan.needs_data and replaying and prepared is None:
         echo()
@@ -814,13 +802,8 @@ def _stage_predecessor(plan: plan_mod.Plan, args: argparse.Namespace, ctx) -> bo
         # `<checkpoints>/step_<n>` fallback has no number to fill in.
         raise _not_published_yet(None)
 
-    # A restart replays the same step from the same predecessor. The bundle
-    # it was unpacked from is gone by now -- consumed once the gate passed --
-    # but the directory the gate produced from it is still here, and the
-    # record beside it says which bytes it came from. Re-downloading 18 GB to
-    # re-derive a directory already on disk is the gap the tester saw, so a
-    # restart starts from that directory; `--refetch` is how to insist on a
-    # fresh copy.
+    # A restart reuses the verified predecessor directory left after its bundle
+    # was consumed. `--refetch` explicitly requests a fresh copy.
     if (
         getattr(args, "restart", False)
         and not args.refetch
@@ -1078,11 +1061,9 @@ _ESTIMATE_CAP = 0.95
 def _reproduced_value(prog: progress_mod.Progress) -> str:
     """What to print for `reproduced`, never a bare `?`.
 
-    A NO MATCH is the one result a person has to act on, and the actionable
-    part of it is the digest. audit_replay only emits the full digest in its
-    success-path JSON, so on a mismatch the CLI has the 16-hex prefix and
-    nothing else -- which it used to render as `?`, sending the reader to the
-    raw log or to a maintainer to find a number the CLI already held.
+    A NO MATCH is actionable only with the reproduced digest. audit_replay
+    emits only its 16-hex prefix on the mismatch path, so show that when the
+    full digest is unavailable.
     """
     if prog.state_hash:
         return prog.state_hash
@@ -1102,11 +1083,7 @@ def _reproduced_note(prog: progress_mod.Progress) -> str:
 def _echo_verdict_hashes(
     prog: progress_mod.Progress, expect_hash: str, *, step: int | None = None
 ) -> None:
-    """The committed/reproduced pair, with where the committed one came from.
-
-    The provenance line exists because the first tester to hit a mismatch
-    asked, reasonably, what it was even comparing against.
-    """
+    """The committed/reproduced pair and the commitment's provenance."""
     echo(
         kv(
             "committed",
@@ -1159,10 +1136,8 @@ def _status_block(
         if prog.bar_eta and prog.bar_eta != "?":
             right += f" · ~{prog.bar_eta} left"
     else:
-        # An init unit emits nothing between building the model and the digest
-        # — measured at 36s of silence for 1b_repop_run3. There is no fraction
-        # to report, so fall back to elapsed against the time the trajectory
-        # publishes for this unit, and say plainly that it is an estimate.
+        # An init unit emits nothing between building the model and its digest.
+        # Estimate progress from the duration published by the trajectory.
         counts = unit_label
         if expected_seconds and prog.phase not in ("done", "failed"):
             fraction = min(elapsed / expected_seconds, _ESTIMATE_CAP)
@@ -1221,14 +1196,7 @@ def _completed_replay(plan: plan_mod.Plan) -> runner.RunState | None:
 
 
 def _runtime_text(state: runner.RunState) -> str:
-    """How long the replay took, or "unknown" -- never a number we made up.
-
-    A detached run whose finish was never recorded used to render as `0s` here
-    and as reporting-time-minus-start in the submitted receipt: two different
-    wrong answers to the same question. `runner.settle_finish` recovers the
-    real value from the log for the paths that can write; when even that is
-    unavailable, saying so beats either of them.
-    """
+    """How long the replay took, or "unknown" when no finish can be recovered."""
     if not state.finished_at:
         return paint("unknown", "yellow")
     try:
@@ -1295,8 +1263,7 @@ def _report(
     )
     echo(kv("device", prog.device or state.device))
     if established and established.get("statement"):
-        # Repeated here, hours after the gate ran, because this block is the
-        # one people quote. A match says nothing about where it started.
+        # Include the verified starting point alongside the final result.
         echo(kv("started from", established["statement"]))
     echo(kv("runtime", _runtime_text(state)))
     if prog.rank0_losses:
@@ -1443,11 +1410,8 @@ def _submit_and_upload(
     bundle = recordmod.result_bundle(outcome=outcome, receipt=_json.loads(result.to_json()))
     resumed = bool(state.submission_id) and state.submitted_with == state.claim
     if resumed:
-        # The record already holds this result under this token, and the token
-        # was spent by that submit: a second POST is refused 401
-        # claim_not_active, which is how a dropped upload used to become a
-        # dead end. What is left is the hand-off, and the record issues upload
-        # URLs for a spent token as long as the submission is named.
+        # The record already holds this result and the claim token is spent.
+        # Resume the hand-off through its saved submission instead of posting again.
         response = recordmod.SubmitResponse(
             disposition="pending-verification",
             submission_id=state.submission_id,

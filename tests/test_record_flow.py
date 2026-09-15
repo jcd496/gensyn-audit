@@ -353,8 +353,7 @@ def test_the_sidecar_carries_exactly_what_the_verifier_checks(tmp_path):
         "device",
         "produced_by",
     }
-    # The verifier compares run_id to the id it is configured with, not to the
-    # name the API was addressed by; the first production hand-off died on that.
+    # The verifier expects its configured run id, not the API's addressable name.
     assert side["run_id"] == "20260722-213626-ad3276b"
     assert uploadmod.sidecar(_receipt(bundle), bundle)["run_id"] == RUN, "no id known: as addressed"
     assert side["step"] == 200
@@ -546,9 +545,7 @@ def test_the_ledger_is_jsonl_not_json():
 
 
 def test_an_upload_without_a_submission_id_is_refused():
-    """It used to be read off a private attribute the CLI set behind the
-    client's back, so the two could silently disagree about which submission
-    the bytes belonged to."""
+    """The upload must explicitly identify the submission receiving its bytes."""
     from gensyn_audit.record import HttpRecord
 
     rec = HttpRecord("https://example.invalid")

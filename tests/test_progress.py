@@ -196,10 +196,8 @@ def test_the_outer_step_bar_is_not_mistaken_for_microbatches():
     assert p.microbatches_total == 288, "must not latch onto the step bar"
 
 
-# The mismatch path, taken verbatim from the first tester report (2026-09-13,
-# OPEN-1B audit step 103). audit_replay logs the digest truncated to 16 hex and
-# then raises, so its success-path JSON block never prints -- which is exactly
-# the case the CLI used to render as `reproduced ?`.
+# A mismatch contains only the 16-hex digest prefix because audit_replay raises
+# before printing its success-path JSON block.
 _MISMATCH_LOG = (
     "2026-09-13 08:03:08,182 INFO pretrain.audit :: "
     "state_hash=2c6c650b09949ad8 expected=e65f46aecf3ceaf1 MATCH=False\n"
