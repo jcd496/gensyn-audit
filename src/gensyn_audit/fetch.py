@@ -238,6 +238,80 @@ def fetch_checkpoint(
     return dest
 
 
+def fetch_genesis(
+    descriptor_uri: str,
+    init_hash_uri: str,
+    dest: Path,
+    *,
+    expected_init_hash: str | None = None,
+    project: str | None = None,
+) -> Path:
+    """Stage what a from-init replay needs, in the layout it looks for.
+
+    Three small files, a few kilobytes in total, standing in for the ~19 GB
+    checkpoint an ordinary step downloads:
+
+    * ``<dest>/step_<n>/meta.json`` — the run descriptor: seed, resolved
+      config, topology, reduction and clip algorithms. ``--from-init`` reads
+      only this from the checkpoint it is given; the tensors beside it in the
+      bucket are never fetched.
+    * ``<dest>/step_<n>/global_stream.json`` — the fetcher still requires the
+      file to exist even though a from-init replay resets the stream to the
+      origin and ignores its saved position.
+    * ``<dest>/state_hash_init.txt`` — the published init commitment, in the
+      PARENT directory because that is where audit_replay looks for it, and
+      where the run publishes it beside the checkpoints.
+
+    That last placement is load-bearing. If the file is absent the replay does
+    not fail: it continues with no init comparison at all, which would mean
+    replaying from a regenerated state nobody checked. So it is fetched here
+    and its absence is an error, not a warning.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    step_dir = dest / Path(descriptor_uri.rstrip("/")).name
+    step_dir.mkdir(parents=True, exist_ok=True)
+
+    local = local_uri_path(descriptor_uri)
+    for name in ("meta.json", "global_stream.json"):
+        target = step_dir / name
+        if local is not None:
+            source = local / name
+            if not source.is_file():
+                raise AuditError(f"run descriptor {local} has no {name}.")
+            shutil.copyfile(source, target)
+        else:
+            _copy_file(descriptor_uri.rstrip("/") + "/" + name, target, project=project)
+
+    init_file = dest / "state_hash_init.txt"
+    local_init = local_uri_path(init_hash_uri)
+    if local_init is not None:
+        if not local_init.is_file():
+            raise AuditError(f"no published init commitment at {local_init}.")
+        shutil.copyfile(local_init, init_file)
+    else:
+        _copy_file(init_hash_uri, init_file, project=project)
+
+    published = init_file.read_text().strip().lower()
+    if len(published) != 64 or not all(c in "0123456789abcdef" for c in published):
+        raise AuditError(
+            f"{init_hash_uri} does not hold a 64-character hex digest.",
+            hint="This is the commitment the regenerated initial state is "
+            "compared against. Refusing to replay without it.",
+        )
+    if expected_init_hash and published != expected_init_hash.lower():
+        raise AuditError(
+            "the record and the published file disagree about the run's init hash.\n"
+            f"    published file  {published}\n"
+            f"    record          {expected_init_hash.lower()}",
+            hint="The file is authoritative — it is the run's own artifact — but "
+            "two sources that must agree do not, which is worth reporting "
+            "rather than replaying past.",
+        )
+    echo(f"  {paint(PASS_MARK, 'green')} run descriptor and init commitment {ARROW} {dest}")
+    echo(f"  {paint(PASS_MARK, 'green')} published init hash {published[:16]}…")
+    return step_dir
+
+
 def fetch_descriptor(uri: str | None, dest: Path, *, project: str | None = None) -> Path | None:
     """A segment boundary's descriptor: ``meta.json`` and nothing else.
 

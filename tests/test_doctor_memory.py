@@ -10,7 +10,7 @@ from gensyn_audit import doctor
 
 
 def _interval():
-    return SimpleNamespace(is_init=False, mps_peak_rss_gb=None)
+    return SimpleNamespace(is_init=False, is_genesis=False, mps_peak_rss_gb=None)
 
 
 @pytest.mark.parametrize(
@@ -37,5 +37,5 @@ def test_a_swapping_machine_is_told_the_hours_and_what_to_do_with_a_mismatch(mon
 
 def test_an_init_unit_is_not_warned_about_swap(monkeypatch):
     monkeypatch.setattr(doctor, "_memory_gb", lambda: 24.0)
-    unit = SimpleNamespace(is_init=True, mps_peak_rss_gb=5.8)
+    unit = SimpleNamespace(is_init=True, is_genesis=False, mps_peak_rss_gb=5.8)
     assert doctor._check_memory(unit, "mps").status == doctor.PASS

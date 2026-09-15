@@ -85,6 +85,14 @@ class Fork:
 #: anything that is not unambiguously one must not be treated as one.
 ANCHOR, CROWD, UNKNOWN = "gensyn-anchor", "crowd", "unknown"
 
+#: The first audit starts from the run's initialization, which is regenerated
+#: from the seed rather than downloaded. There are no bytes to check before the
+#: replay, and the replay itself refuses to continue unless the state it
+#: regenerates reproduces the run's published init hash -- so this path gates
+#: on the same evidence, one layer further in. It is not a relaxation of CROWD
+#: and must never be reachable for a step that does name an artifact.
+INIT = "initial-weights"
+
 #: The record's vocabulary for `predecessor.kind`, mapped to the two paths.
 #: Matching is exact and closed — a value the record does not publish today is
 #: UNKNOWN, never "probably an anchor". A hostname, an absent gradients file
@@ -96,7 +104,32 @@ _KINDS = {
     "crowd": CROWD,
     "crowd-provided": CROWD,
     "crowd-provided checkpoint": CROWD,
+    "initial weights": INIT,
+    "initial-weights": INIT,
 }
+
+
+@dataclass(frozen=True)
+class Genesis:
+    """Where the first audit's starting state comes from, since nothing does.
+
+    Three small files, none of them the state itself. The descriptor supplies
+    the run's seed, resolved config, topology and reduction rules -- it is the
+    run's own first checkpoint, used for its metadata and never for its
+    weights. The init hash is what the regenerated state must reproduce before
+    the replay is allowed to start.
+    """
+
+    descriptor_uri: str
+    """The checkpoint whose ``meta.json`` describes the run. Its tensors are
+    not read: ``--from-init`` rebuilds the start state from the seed."""
+
+    init_state_hash_uri: str
+    """``state_hash_init.txt``, published beside the checkpoints."""
+
+    init_state_hash: str | None = None
+    """The same digest, inlined by the record so the value can be compared
+    before anything is fetched. The file is what the replay gates on."""
 
 
 @dataclass(frozen=True)
@@ -122,6 +155,10 @@ class Predecessor:
     step: int | None
     check: str | None = None
 
+    genesis: Genesis | None = None
+    """Set only when ``kind`` is ``initial weights``: the descriptor and the
+    init commitment a from-init replay needs in place of a download."""
+
     artifact_files: tuple[KitFile, ...] = ()
     """Optional per-file SHA-256 manifest for directory checkpoints.
     Packed crowd hand-offs use ``digest`` and do not require this extension."""
@@ -144,6 +181,11 @@ class Predecessor:
     def is_trusted_anchor(self) -> bool:
         """An original Gensyn checkpoint, as identified by the record itself."""
         return self.provenance == ANCHOR
+
+    @property
+    def is_initial_weights(self) -> bool:
+        """The run's initialization, regenerated rather than fetched."""
+        return self.provenance == INIT
 
     @property
     def exists(self) -> bool:
@@ -496,6 +538,34 @@ def _parse_manifest(doc: dict) -> RecordManifest:
     )
 
 
+def _parse_genesis(raw: object) -> Genesis | None:
+    """The from-init descriptor block, or None.
+
+    Both URIs are required: a genesis predecessor that names neither the
+    descriptor nor the init commitment describes nothing a replay could start
+    from, and half of it is worse than none -- the harness will happily replay
+    with no init comparison at all if the hash file is simply absent.
+    """
+    if not isinstance(raw, dict):
+        return None
+    descriptor = raw.get("descriptorUri") or raw.get("descriptor_uri")
+    init_uri = raw.get("initStateHashUri") or raw.get("init_state_hash_uri")
+    if not descriptor or not init_uri:
+        raise AuditError(
+            "the record describes a from-init predecessor without naming both the "
+            "run descriptor and the published init commitment.",
+            hint="A from-init replay regenerates the start state and must compare "
+            "it against the run's own init hash before replaying. Without that "
+            "file it would replay from an unchecked state.",
+        )
+    digest = raw.get("initStateHash") or raw.get("init_state_hash")
+    return Genesis(
+        descriptor_uri=str(descriptor),
+        init_state_hash_uri=str(init_uri),
+        init_state_hash=(str(digest).lower() if digest else None),
+    )
+
+
 def _parse_fork(raw: object) -> Fork | None:
     if not isinstance(raw, dict) or not raw.get("descriptorCheckpointUri"):
         return None
@@ -569,6 +639,7 @@ def _parse_step_context(run: str, step: int, doc: dict) -> StepContext:
             # derives it from the step numbering, which knows the difference.
             step=(int(pred["step"]) if pred.get("step") is not None else None),
             check=pred.get("check"),
+            genesis=_parse_genesis(pred.get("genesis")),
             artifact_files=parse_artifact_files(pred.get("artifactFiles")),
         ),
         descriptor_uri=doc.get("descriptorCheckpointUri") or doc.get("descriptor_uri"),

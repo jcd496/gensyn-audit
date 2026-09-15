@@ -222,6 +222,11 @@ class Plan:
         return self.unit.is_init
 
     @property
+    def is_genesis(self) -> bool:
+        """The run's first step: replayed from the regenerated initialization."""
+        return self.unit.is_genesis
+
+    @property
     def needs_data(self) -> bool:
         return not self.is_init
 
@@ -273,7 +278,13 @@ class Plan:
             "--expect-hash",
             self.unit.target_hash,
         ]
-        if self.unit.descriptor_uri:
+        if self.is_genesis:
+            # The start state is rebuilt from the seed; the checkpoint above is
+            # the run descriptor. audit_replay gates the regenerated state
+            # against state_hash_init.txt (staged beside it) before replaying,
+            # and refuses --descriptor-checkpoint on this path.
+            args += ["--from-init"]
+        if self.unit.descriptor_uri and not self.is_genesis:
             # The one interval that crosses a fork: state from --checkpoint,
             # but the segment-scoped descriptor (clipper, repop_env, topology,
             # resolved config) from the segment that actually trained it.
@@ -284,9 +295,15 @@ class Plan:
             args += ["--gcs-root", self.unit.gcs_root, "--fetch-dest", str(self.workdir.data)]
         else:
             args += ["--data-root", str(self.workdir.data / "shards")]
-        if self.device == "mps":
+        if self.device == "mps" and not self.is_genesis:
             # ~12GB of moments and ~6GB of fp32 master off the unified pool.
             # Both are bitwise-identical; they only move bytes to disk.
+            #
+            # Not on the genesis path: audit_replay refuses --offload-optimizer
+            # with --from-init (init has no moments to offload; they accrue
+            # during the replay), so the whole optimizer state stays resident
+            # and the machine needs the headroom instead. `doctor` says so
+            # before anything starts rather than letting the replay raise.
             args += [
                 "--offload-optimizer",
                 "--offload-master",
@@ -309,9 +326,46 @@ class Plan:
         one file from --descriptor-checkpoint, so nothing else is fetched."""
         return self.workdir.root / "descriptor"
 
+    def genesis_root(self) -> Path:
+        """Where the run descriptor is staged for a from-init replay.
+
+        The layout is the published bucket's, not a convenience of ours:
+        audit_replay looks for ``state_hash_init.txt`` in the PARENT of
+        --checkpoint, exactly where the run publishes it beside the checkpoint
+        directories. Flattening the two into one directory would silently skip
+        the init comparison, which is the only thing standing between a
+        from-init replay and starting from an unchecked state.
+        """
+        return self.workdir.root / "genesis"
+
+    def genesis_descriptor_path(self) -> Path:
+        step = self.unit.predecessor_step
+        return self.genesis_root() / f"step_{(step or 0):09d}"
+
+    def genesis_sources(self) -> tuple[str, str]:
+        """Where the descriptor and the init commitment are published.
+
+        A genesis unit carries both by construction — `_unit_from_step` refuses
+        a from-init predecessor the record has half-described — so this states
+        the invariant rather than defending against a caller. If it ever fires,
+        something built a from-init unit by another route and the replay would
+        otherwise start from a state nothing compared.
+        """
+        descriptor, init_hash = self.unit.checkpoint_uri, self.unit.init_state_hash_uri
+        if not descriptor or not init_hash:
+            raise AuditError(
+                "this from-init unit names no run descriptor or no init commitment.",
+                hint="Both come from the record's `predecessor.genesis` block.",
+            )
+        return descriptor, init_hash
+
     def checkpoint_path(self) -> Path:
         if self.checkpoint is not None:
             return self.checkpoint
+        if self.is_genesis:
+            # --from-init reads this for its meta.json alone. Its tensors are
+            # never loaded, so nothing large is staged here.
+            return self.genesis_descriptor_path()
         # A predecessor already on this machine is used where it is, not copied
         # into the workdir first. Planning a workdir path for it would hand
         # audit_replay a directory nothing ever populates.
@@ -379,6 +433,15 @@ def build(
             "the next segment's descriptor, so --descriptor-checkpoint overlays it. "
             "Without that the replay mismatches on the first step and looks like a "
             "divergence when it is not."
+        )
+    if unit.is_genesis:
+        plan.notes.append(
+            "This is the run's first step, so there is no checkpoint to start "
+            "from: the initial weights are regenerated from the published seed "
+            "and compared against the run's own init hash before the replay "
+            "begins. Nothing but a few kilobytes of descriptor is downloaded "
+            "for the start state, and the optimizer offload is unavailable on "
+            "this path, so it needs more memory than a later step."
         )
     if unit.is_init:
         plan.notes.append(

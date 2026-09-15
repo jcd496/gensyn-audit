@@ -32,6 +32,15 @@ record gets to say*:
     Missing gradients, a missing rank chain, forged metadata or a hash mismatch
     stop the audit; none of them fall back to the anchor path.
 
+``initial-weights``
+    The run's first step, which starts from the initialization rather than a
+    checkpoint. There are no bytes to check here, because none are fetched:
+    the state is regenerated from the published seed. (2) still happens, one
+    layer in — ``audit_replay --from-init`` recomputes the init hash and
+    refuses to replay unless it reproduces the run's published
+    ``state_hash_init.txt``. This gate records that the check belongs to the
+    replay rather than pretending it ran here.
+
 ``unknown``
     The record said something this tool does not recognise, or said nothing.
     Fails closed. A predecessor that cannot be classified cannot be gated, and
@@ -57,6 +66,10 @@ from .ui import PASS, Activity, echo, kv, paint
 from .upload import digest_file
 
 ANCHOR_REPORT = "Trusted Gensyn anchor"
+GENESIS_REPORT = (
+    "Run initialization, regenerated from the published seed; the replay "
+    "compares it against the run's published init hash before starting."
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +98,8 @@ class Verdict:
 
     @property
     def summary(self) -> str:
+        if self.provenance == recordmod.INIT:
+            return GENESIS_REPORT
         if self.provenance == recordmod.ANCHOR:
             return ANCHOR_REPORT
         return (
@@ -241,6 +256,34 @@ def _commitments(source: str | None, why: str):
     return commitmentsmod.load(source)
 
 
+def gate_genesis(descriptor: Path, *, init_hash: str) -> Verdict:
+    """The verdict for a from-init start, which has no artifact to check.
+
+    Deliberately not a branch inside ``gate``: that function's contract is
+    "hold these downloaded bytes to what the record published", and there are
+    no such bytes here. What this records is which check the *replay* is about
+    to run, so the receipt cannot later be read as though an artifact had been
+    verified.
+    """
+    meta = descriptor / "meta.json"
+    published = descriptor.parent / "state_hash_init.txt"
+    if not meta.is_file():
+        raise AuditError(f"no run descriptor at {meta}.")
+    if not published.is_file():
+        raise AuditError(
+            f"no published init commitment at {published}.",
+            hint="audit_replay looks for state_hash_init.txt beside the "
+            "checkpoint directory. Without it a from-init replay starts from "
+            "a regenerated state nothing compared, which is the one thing "
+            "this path must not do.",
+        )
+    echo(kv("start state", "regenerated from the run's seed", "nothing downloaded"))
+    echo(kv("init commitment", init_hash, "checked by the replay before it starts"))
+    verdict = Verdict(recordmod.INIT, "not-applicable", "verified-by-replay")
+    echo(kv("predecessor", verdict.summary))
+    return verdict
+
+
 def gate(
     *,
     checkpoint: Path,
@@ -263,6 +306,13 @@ def gate(
             "pass --checkpoint with a directory you already hold.",
         )
     provenance = pred.provenance
+
+    if provenance == recordmod.INIT:
+        raise AuditError(
+            "a from-init predecessor has no artifact for this gate to check.",
+            hint="Call gate_genesis: the state is regenerated, and the check "
+            "that matters happens inside the replay.",
+        )
 
     if provenance == recordmod.UNKNOWN:
         raise AuditError(

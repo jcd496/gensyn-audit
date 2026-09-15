@@ -60,6 +60,21 @@ class StepRef:
         return self.audit
 
     @property
+    def is_genesis(self) -> bool:
+        """The one audit whose predecessor is not a checkpoint.
+
+        Audit 0 replays log step 1, and log step 0 is the run's initialization:
+        regenerated from the seed, hashed, and published as
+        ``ckpt/state_hash_init.txt`` -- never written as a checkpoint
+        directory. ``ckpt/step_000000000/`` does not exist and never did; the
+        run's checkpoints start at 100.
+
+        So this step alone starts from ``--from-init`` rather than a download.
+        Everything after it is an ordinary interval.
+        """
+        return self.audit == 0
+
+    @property
     def segment(self) -> int:
         return self.audit // 100
 

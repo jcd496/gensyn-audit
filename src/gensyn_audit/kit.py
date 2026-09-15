@@ -185,9 +185,32 @@ class Unit:
     directory that was never written.
     """
 
+    from_init: bool = False
+    """Regenerate the start state from the seed instead of loading one.
+
+    True for exactly one unit: the first audit of a run, whose predecessor is
+    the initialization. `checkpoint_uri` then names the run DESCRIPTOR -- a
+    checkpoint read for its meta.json and never for its tensors -- and
+    `init_state_hash_uri` names the commitment the regenerated state must
+    reproduce before the replay starts.
+    """
+
+    init_state_hash_uri: str | None = None
+    """``state_hash_init.txt``, staged beside the descriptor for the replay."""
+
     @property
     def is_init(self) -> bool:
         return self.kind == "init"
+
+    @property
+    def is_genesis(self) -> bool:
+        """An interval that starts from the regenerated initialization.
+
+        Distinct from `is_init`, which verifies the init hash and stops. This
+        one replays the run's first training step, hands off a checkpoint and
+        submits a result like any other interval.
+        """
+        return self.from_init and not self.is_init
 
     @property
     def label(self) -> str:

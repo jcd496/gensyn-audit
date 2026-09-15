@@ -50,6 +50,24 @@ _KIT_DISK_GB = 6.0
 #: downloaded with every crowd predecessor and uploaded with every hand-off.
 _INTERVAL_DISK_GB = 68.0
 
+#: The genesis step downloads no predecessor (the start state is regenerated),
+#: so the ~19-26 GB an ordinary interval spends on one is not needed. What
+#: remains is the shards the first step consumes, the hand-off it writes, and
+#: the offload spill it cannot use -- see `_GENESIS_MEMORY_GB`.
+_GENESIS_DISK_GB = 45.0
+
+#: What a from-init replay needs resident on MPS, with no offload available.
+#:
+#: `audit_replay` refuses `--offload-optimizer` with `--from-init`: at init
+#: there are no moments to spill, and they accrue on-device during the replay.
+#: So the fp32 master (~6.4 GB at 1.6 B params), the AdamW moments the first
+#: step creates (~12.9 GB) and the backward's own transients all stay in the
+#: unified pool, where an ordinary interval would have spilled ~18 GB of it to
+#: disk. This is the honest floor for the path as it exists today, not a
+#: measured peak, and it is why the genesis step is not offered on the
+#: machines a later step runs on happily.
+_GENESIS_MEMORY_GB = 48.0
+
 
 @dataclass
 class Check:
@@ -81,6 +99,8 @@ def _needed_memory_gb(unit: Unit) -> tuple[float, str]:
         return unit.mps_peak_rss_gb * _MEMORY_HEADROOM, f"measured peak {unit.mps_peak_rss_gb} GB"
     if unit.is_init:
         return 8.0, "typical init unit"
+    if unit.is_genesis:
+        return _GENESIS_MEMORY_GB, "from-init replay; the optimizer cannot be offloaded"
     return _INTERVAL_MEMORY_GB, "interval replay with both offload flags"
 
 
@@ -116,6 +136,11 @@ def _check_memory(unit: Unit, device: str) -> Check:
             fix="Below this the machine swaps. An init unit will still finish; an "
             "interval replay can go from hours to days.",
         )
+    if unit.is_genesis:
+        # Above the floor: no comfort band to report, because there is no
+        # offload to fall back on and no measurement of this path on a machine
+        # between the two numbers.
+        return Check("memory", PASS, f"{have:.0f} GB", note=f"unit needs ~{need:.0f} GB ({why})")
     if not unit.is_init and have < _INTERVAL_COMFORT_GB:
         return Check(
             "memory",
@@ -171,7 +196,12 @@ def _check_disk(workdir: Path, unit: Unit) -> Check:
     except OSError as exc:
         return Check("free disk", WARN, "unknown", str(exc))
 
-    need = _KIT_DISK_GB if unit.is_init else _KIT_DISK_GB + _INTERVAL_DISK_GB
+    if unit.is_init:
+        need = _KIT_DISK_GB
+    elif unit.is_genesis:
+        need = _KIT_DISK_GB + _GENESIS_DISK_GB
+    else:
+        need = _KIT_DISK_GB + _INTERVAL_DISK_GB
     have_gb = 0.0 if unit.is_init else _already_on_disk_gb(workdir)
     need = max(need - have_gb, _KIT_DISK_GB)
     resumed = f", {have_gb:.0f} GB already fetched" if have_gb >= 1 else ""
@@ -347,6 +377,11 @@ def _check_descriptor(unit: Unit) -> list[Check]:
     """
     if unit.is_init or not unit.checkpoint_uri:
         return []
+    if unit.is_genesis:
+        # Same file, different role: for a from-init replay this checkpoint is
+        # the run DESCRIPTOR. The guards below are exactly what audit_replay
+        # requires of it, so they are worth running -- and cost one 5 KB read.
+        pass
     if unit.checkpoint_uri.rstrip("/").endswith(".safetensors"):
         return [
             Check(
@@ -478,6 +513,30 @@ def _check_predecessor_digest(ctx) -> list[Check]:
     """Check record provenance and digest availability before downloading."""
     if ctx is None:
         return []
+    if ctx.predecessor.is_initial_weights:
+        # Nothing is downloaded for the start state, so there is no digest to
+        # publish. What must exist is the descriptor and the init commitment;
+        # the record is refused above if it names a from-init predecessor
+        # without both.
+        if ctx.predecessor.genesis is None:
+            return [
+                Check(
+                    "predecessor",
+                    FAIL,
+                    "from-init without a descriptor",
+                    fix="The record must name the run descriptor and the published "
+                    "init commitment for the first step.",
+                )
+            ]
+        return [
+            Check(
+                "predecessor",
+                PASS,
+                "run initialization",
+                note="regenerated from the seed; the replay checks it against the "
+                "published init hash",
+            )
+        ]
     if not (ctx.predecessor.is_trusted_anchor or ctx.predecessor.is_crowd_provided):
         return [
             Check(

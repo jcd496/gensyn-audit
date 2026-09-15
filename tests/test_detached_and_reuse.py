@@ -323,7 +323,9 @@ def _plan_for(tmp_path: Path, ctx):
 
     from gensyn_audit import plan as plan_mod
 
-    unit = SimpleNamespace(checkpoint_uri=ctx.predecessor.uri, predecessor_step=200, is_init=False)
+    unit = SimpleNamespace(
+        checkpoint_uri=ctx.predecessor.uri, predecessor_step=200, is_init=False, is_genesis=False
+    )
     return plan_mod.Plan(
         unit=unit, kit=None, workdir=plan_mod.Workdir(tmp_path / "wd"), venv=tmp_path / "venv"
     )
