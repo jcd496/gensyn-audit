@@ -389,6 +389,11 @@ def _build_plan(args: argparse.Namespace, record=None, manifest=None):
         )
     else:
         unit = _resolve_unit(traj, args)
+    if unit.is_genesis and getattr(args, "checkpoint", None):
+        raise AuditError(
+            "--checkpoint is not supported for genesis audits; use --predecessor-uri "
+            "to stage a descriptor with its initial-state commitment."
+        )
     paths = plan_mod.KitPaths(k.kit_id)
     return (
         plan_mod.build(
