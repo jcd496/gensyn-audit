@@ -53,16 +53,22 @@ the same submission.
 
 Two differences are worth knowing before you claim it:
 
-- **It needs more memory.** The replay cannot offload the optimizer on this
-  path — at init there are no moments to spill, and they accrue on-device
-  during the step — so the fp32 master and the AdamW moments stay resident
-  where a later step would have spilled ~18 GB of them to disk. `doctor` asks
-  for ~48 GB and refuses below it rather than letting the replay raise hours
-  in. On CUDA and CPU the same rule applies; the automatic offload planners do
-  not run from init.
+- **Its memory requirements are provisional.** From-init cannot offload the
+  optimizer. Preflight requires at least 48 GiB host memory for CPU and MPS;
+  CUDA additionally requires 48 GiB free VRAM on the selected GPU. Unknown
+  capacity is refused. These are screening thresholds, not measured sufficient
+  capacities; passing them still produces a warning. The CUDA probe runs in
+  the kit environment and respects `CUDA_VISIBLE_DEVICES`. `run` installs the
+  kit before checking memory, but checks before fetching replay data.
 - **It downloads less.** No predecessor checkpoint, so the disk budget is
   smaller than an ordinary interval's: the shards the first step consumes, the
   hand-off it writes, and the kit.
+
+Step-0 runtime and peak memory are not measured yet. Ordinary interval timings
+below do not establish either for this path. Before public enablement, validate
+the real first update, upload and fresh-download its handoff, reconstruct the
+state hash and replay the next update. Exercise the real loss verifier in an
+isolated/staging setup; simulated staging acceptance is not that proof.
 
 ## Memory and swap
 

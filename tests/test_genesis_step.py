@@ -46,7 +46,7 @@ def _genesis_unit(**over) -> K.Unit:
         "checkpoint_uri": DESCRIPTOR,
         "gcs_root": "gs://gensyn-open-1b/data/shards",
         "expect_hash": STEP1_HASH,
-        "predecessor_step": 100,
+        "predecessor_step": 0,
         "from_init": True,
         "init_state_hash_uri": INIT_URI,
     }
@@ -226,7 +226,7 @@ def _ctx(pred: dict) -> recordmod.StepContext:
 
 
 def _args(**over):
-    base = dict(config_name=None, predecessor_uri=None, run="open-1b")
+    base = {"config_name": None, "predecessor_uri": None, "run": "open-1b"}
     return SimpleNamespace(**{**base, **over})
 
 
@@ -299,7 +299,68 @@ def test_preflight_names_the_higher_memory_floor_for_a_from_init_replay(monkeypa
 
 def test_preflight_passes_the_genesis_step_on_a_large_machine(monkeypatch):
     monkeypatch.setattr(doctor, "_memory_gb", lambda: 64.0)
-    assert doctor._check_memory(_genesis_unit(), "mps").status == doctor.PASS
+    assert doctor._check_memory(_genesis_unit(), "mps").status == doctor.WARN
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps", "cuda"])
+@pytest.mark.parametrize("host", [None, 24.0, 36.0])
+def test_genesis_rejects_insufficient_or_unknown_host_memory(monkeypatch, device, host):
+    monkeypatch.setattr(doctor, "_memory_gb", lambda: host)
+    assert doctor._check_memory(_genesis_unit(), device).blocking
+
+
+@pytest.mark.parametrize(
+    "free, status",
+    [(None, doctor.FAIL), (24.0, doctor.FAIL), (47.9, doctor.FAIL), (64.0, doctor.WARN)],
+)
+def test_genesis_cuda_checks_free_vram_separately(monkeypatch, tmp_path, free, status):
+    monkeypatch.setattr(doctor, "_memory_gb", lambda: 128.0)
+    seen = []
+
+    def probe(venv):
+        seen.append(venv)
+        return free
+
+    monkeypatch.setattr(doctor, "_cuda_free_gb", probe)
+    assert doctor._check_memory(_genesis_unit(), "cuda", tmp_path).status == status
+    assert seen == [tmp_path]
+
+
+def test_genesis_cpu_warns_even_when_above_the_provisional_floor(monkeypatch):
+    monkeypatch.setattr(doctor, "_memory_gb", lambda: 64.0)
+    check = doctor._check_memory(_genesis_unit(), "cpu")
+    assert check.status == doctor.WARN
+    assert "not a measured" in check.note
+
+
+@pytest.mark.parametrize("output", ["nan", "inf", "-1", "not available", ""])
+def test_cuda_probe_refuses_invalid_measurements(monkeypatch, tmp_path, output):
+    python = tmp_path / "bin" / "python"
+    python.parent.mkdir()
+    python.touch()
+    monkeypatch.setattr(
+        doctor, "_run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=output)
+    )
+    assert doctor._cuda_free_gb(tmp_path) is None
+
+
+def test_cuda_probe_uses_kit_python_and_preserves_device_selection(monkeypatch, tmp_path):
+    python = tmp_path / "bin" / "python"
+    python.parent.mkdir()
+    python.touch()
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+
+    def probe(argv, timeout):
+        import os
+
+        assert argv[0] == str(python)
+        assert "mem_get_info" in argv[2]
+        assert timeout == 30
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "2"
+        return SimpleNamespace(returncode=0, stdout="64.0\n")
+
+    monkeypatch.setattr(doctor, "_run", probe)
+    assert doctor._cuda_free_gb(tmp_path) == 64.0
 
 
 def test_preflight_accepts_the_record_describing_a_from_init_predecessor():

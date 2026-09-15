@@ -13,6 +13,7 @@ and prescribes; nothing installs, and nothing is repaired behind your back.
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import resource
@@ -56,16 +57,11 @@ _INTERVAL_DISK_GB = 68.0
 #: the offload spill it cannot use -- see `_GENESIS_MEMORY_GB`.
 _GENESIS_DISK_GB = 45.0
 
-#: What a from-init replay needs resident on MPS, with no offload available.
-#:
-#: `audit_replay` refuses `--offload-optimizer` with `--from-init`: at init
-#: there are no moments to spill, and they accrue on-device during the replay.
-#: So the fp32 master (~6.4 GB at 1.6 B params), the AdamW moments the first
-#: step creates (~12.9 GB) and the backward's own transients all stay in the
-#: unified pool, where an ordinary interval would have spilled ~18 GB of it to
-#: disk. This is the honest floor for the path as it exists today, not a
-#: measured peak, and it is why the genesis step is not offered on the
-#: machines a later step runs on happily.
+#: Provisional screening threshold, NOT a measured sufficient capacity.
+#: From-init refuses optimizer offload, so the master, moments and backward
+#: transients need more headroom. MPS/CPU check host capacity; CUDA checks free
+#: VRAM on the selected device as well as host capacity for packing. These
+#: different pools need independent full-size validation before release.
 _GENESIS_MEMORY_GB = 48.0
 
 
@@ -120,7 +116,76 @@ def _check_platform(device: str) -> Check:
     return Check("Apple Silicon", PASS, proc.stdout.strip() if proc.returncode == 0 else "arm64")
 
 
-def _check_memory(unit: Unit, device: str) -> Check:
+def _cuda_free_gb(venv: Path | None) -> float | None:
+    if venv is None or not kitmod.venv_python(venv).is_file():
+        return None
+    try:
+        proc = _run(
+            [
+                str(kitmod.venv_python(venv)),
+                "-c",
+                "import torch; print(torch.cuda.mem_get_info()[0] / 1024**3)",
+            ],
+            timeout=30,
+        )
+        value = float(proc.stdout.strip()) if proc.returncode == 0 else float("nan")
+        return value if math.isfinite(value) and value >= 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def _check_genesis_memory(device: str, venv: Path | None) -> Check:
+    need = _GENESIS_MEMORY_GB
+    host = _memory_gb()
+    note = (
+        "from-init cannot offload the optimizer; provisional threshold, "
+        "not a measured capacity requirement or a guarantee this replay fits"
+    )
+    if host is None or host < need:
+        return Check(
+            "memory",
+            FAIL,
+            "unknown" if host is None else f"{host:.0f} GiB host",
+            note=note,
+            fix=f"This path requires at least {need:.0f} GiB host memory at preflight. "
+            "Use a larger host or audit a later step.",
+        )
+    if device == "cuda":
+        free = _cuda_free_gb(venv)
+        if free is None:
+            return Check(
+                "memory",
+                FAIL,
+                "CUDA memory unknown",
+                note=note,
+                fix="Could not measure free VRAM with the kit's Python. Provision the kit "
+                "and check that CUDA is available, then rerun doctor. "
+                "The probe respects CUDA_VISIBLE_DEVICES.",
+            )
+        if free < need:
+            return Check(
+                "memory",
+                FAIL,
+                f"{free:.1f} GiB free VRAM",
+                note=note,
+                fix=f"This path requires at least {need:.0f} GiB free VRAM on the selected "
+                "GPU, separately from host RAM. Free GPU memory or audit a later step.",
+            )
+        value = f"{free:.1f} GiB free VRAM; {host:.0f} GiB host"
+    else:
+        value = f"{host:.0f} GiB {'unified' if device == 'mps' else 'host'} memory"
+    return Check(
+        "memory",
+        WARN,
+        value,
+        note=note,
+        fix="Full-size step-0 replay, handoff and peak-memory validation is pending.",
+    )
+
+
+def _check_memory(unit: Unit, device: str, venv: Path | None = None) -> Check:
+    if unit.is_genesis:
+        return _check_genesis_memory(device, venv)
     if device != "mps":
         return Check("memory", SKIP, "n/a")
     have = _memory_gb()
@@ -136,11 +201,6 @@ def _check_memory(unit: Unit, device: str) -> Check:
             fix="Below this the machine swaps. An init unit will still finish; an "
             "interval replay can go from hours to days.",
         )
-    if unit.is_genesis:
-        # Above the floor: no comfort band to report, because there is no
-        # offload to fall back on and no measurement of this path on a machine
-        # between the two numbers.
-        return Check("memory", PASS, f"{have:.0f} GB", note=f"unit needs ~{need:.0f} GB ({why})")
     if not unit.is_init and have < _INTERVAL_COMFORT_GB:
         return Check(
             "memory",
@@ -595,7 +655,7 @@ def run_checks(plan: Plan, *, deep: bool = True, ctx=None, for_replay: bool = Tr
     ]
     if for_replay:
         checks[1:1] = [
-            _check_memory(plan.unit, plan.device),
+            _check_memory(plan.unit, plan.device, plan.venv),
             _check_disk(plan.workdir.root, plan.unit),
         ]
     if deep:

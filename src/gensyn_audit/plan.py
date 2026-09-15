@@ -300,8 +300,7 @@ class Plan:
             # Both are bitwise-identical; they only move bytes to disk.
             #
             # Not on the genesis path: audit_replay refuses --offload-optimizer
-            # with --from-init (init has no moments to offload; they accrue
-            # during the replay), so the whole optimizer state stays resident
+            # with --from-init, so the optimizer state stays resident
             # and the machine needs the headroom instead. `doctor` says so
             # before anything starts rather than letting the replay raise.
             args += [
@@ -339,8 +338,10 @@ class Plan:
         return self.workdir.root / "genesis"
 
     def genesis_descriptor_path(self) -> Path:
-        step = self.unit.predecessor_step
-        return self.genesis_root() / f"step_{(step or 0):09d}"
+        descriptor, _ = self.genesis_sources()
+        # The predecessor is initialization (step 0), but the metadata comes
+        # from a later checkpoint. Match fetch_genesis, including URI overrides.
+        return self.genesis_root() / Path(descriptor.rstrip("/")).name
 
     def genesis_sources(self) -> tuple[str, str]:
         """Where the descriptor and the init commitment are published.
