@@ -58,8 +58,9 @@ Two differences are worth knowing before you claim it:
   CUDA additionally requires 48 GiB free VRAM on the selected GPU. Unknown
   capacity is refused. These are screening thresholds, not measured sufficient
   capacities; passing them still produces a warning. The CUDA probe runs in
-  the kit environment and respects `CUDA_VISIBLE_DEVICES`. `run` installs the
-  kit before checking memory, but checks before fetching replay data.
+  the kit environment and respects `CUDA_VISIBLE_DEVICES`, so `doctor` on a
+  machine without the kit reports VRAM as not yet measured rather than
+  failing; `run` installs the kit, then checks, then fetches.
 - **It downloads less.** No predecessor checkpoint, so the disk budget is
   smaller than an ordinary interval's: the shards the first step consumes, the
   hand-off it writes, and the kit.

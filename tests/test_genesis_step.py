@@ -315,6 +315,8 @@ def test_genesis_rejects_insufficient_or_unknown_host_memory(monkeypatch, device
 )
 def test_genesis_cuda_checks_free_vram_separately(monkeypatch, tmp_path, free, status):
     monkeypatch.setattr(doctor, "_memory_gb", lambda: 128.0)
+    monkeypatch.setattr(K, "venv_python", lambda venv: venv / "python")
+    (tmp_path / "python").touch()
     seen = []
 
     def probe(venv):
@@ -324,6 +326,24 @@ def test_genesis_cuda_checks_free_vram_separately(monkeypatch, tmp_path, free, s
     monkeypatch.setattr(doctor, "_cuda_free_gb", probe)
     assert doctor._check_memory(_genesis_unit(), "cuda", tmp_path).status == status
     assert seen == [tmp_path]
+
+
+@pytest.mark.parametrize("venv", [None, "missing"])
+def test_genesis_cuda_defers_the_vram_check_until_the_kit_exists(monkeypatch, tmp_path, venv):
+    """`doctor` runs before the kit is installed; that is not a failed card.
+
+    The probe needs the kit's torch. Failing here would tell everyone on CUDA
+    that their machine cannot audit step 0 for the sole reason that they ran
+    the check first, which is what the check is for. `run` installs the kit
+    and repeats the check, so the deferral costs nothing.
+    """
+    monkeypatch.setattr(doctor, "_memory_gb", lambda: 128.0)
+    monkeypatch.setattr(doctor, "_cuda_free_gb", lambda venv: pytest.fail("probed a missing kit"))
+    check = doctor._check_memory(_genesis_unit(), "cuda", None if venv is None else tmp_path / venv)
+    assert check.status == doctor.WARN
+    assert not check.blocking
+    assert "not yet measured" in check.value
+    assert "run" in check.fix
 
 
 def test_genesis_cpu_warns_even_when_above_the_provisional_floor(monkeypatch):

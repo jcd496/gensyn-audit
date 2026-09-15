@@ -95,8 +95,9 @@ def _needed_memory_gb(unit: Unit) -> tuple[float, str]:
         return unit.mps_peak_rss_gb * _MEMORY_HEADROOM, f"measured peak {unit.mps_peak_rss_gb} GB"
     if unit.is_init:
         return 8.0, "typical init unit"
-    if unit.is_genesis:
-        return _GENESIS_MEMORY_GB, "from-init replay; the optimizer cannot be offloaded"
+    # No genesis case: `_check_memory` hands that unit to `_check_genesis_memory`
+    # before it gets here, because its budget is a threshold per device pool
+    # rather than one figure.
     return _INTERVAL_MEMORY_GB, "interval replay with both offload flags"
 
 
@@ -151,6 +152,20 @@ def _check_genesis_memory(device: str, venv: Path | None) -> Check:
             "Use a larger host or audit a later step.",
         )
     if device == "cuda":
+        # The probe needs the kit's torch, which `run` installs before this
+        # check and `doctor` does not install at all. A missing venv says
+        # nothing about the card, so it is not a failed machine: `run` repeats
+        # the check once the kit is in place and fails there if VRAM is short.
+        if venv is None or not kitmod.venv_python(venv).is_file():
+            return Check(
+                "memory",
+                WARN,
+                f"{host:.0f} GiB host; VRAM not yet measured",
+                note=note,
+                fix="Free VRAM is measured with the kit's Python, which is not installed yet. "
+                "`run` installs the kit and then checks for at least "
+                f"{need:.0f} GiB free on the selected GPU before fetching anything.",
+            )
         free = _cuda_free_gb(venv)
         if free is None:
             return Check(
@@ -158,9 +173,8 @@ def _check_genesis_memory(device: str, venv: Path | None) -> Check:
                 FAIL,
                 "CUDA memory unknown",
                 note=note,
-                fix="Could not measure free VRAM with the kit's Python. Provision the kit "
-                "and check that CUDA is available, then rerun doctor. "
-                "The probe respects CUDA_VISIBLE_DEVICES.",
+                fix="Could not measure free VRAM with the kit's Python. Check that CUDA is "
+                "available to it, then rerun. The probe respects CUDA_VISIBLE_DEVICES.",
             )
         if free < need:
             return Check(
