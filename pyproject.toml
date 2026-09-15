@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gensyn-audit"
+version = "1.0.0"
+description = "Independently replay and verify Gensyn Open 1B training steps."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    # A 31 KB C extension, and the only dependency. Checkpoint shards are
+    # composite objects for which GCS publishes no md5, so crc32c is the only
+    # checksum available for essentially the whole download; in pure Python it
+    # runs at ~20 MB/s and becomes the bottleneck instead of the network.
+    # gcs.py keeps a pure-Python fallback, so verification still works if this
+    # cannot be installed — it is just slow.
+    "google-crc32c>=1.5",
+]
+
+[project.scripts]
+# `audit` is taken: macOS ships /usr/sbin/audit, and shadowing a
+# system binary on the only supported platform is a bad default.
+gensyn-audit = "gensyn_audit.cli:main"
+
+[project.urls]
+Website = "https://open1b.gensyn.ai/"
+Repository = "https://github.com/gensyn-ai/gensyn-audit"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gensyn_audit"]
+# Local mock fixtures may contain withheld loss values and must never ship.
+exclude = ["src/gensyn_audit/mocks/**"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["RUF012"]
+
+[tool.pyrefly]
+project-includes = ["src/**/*.py"]
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.3.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.7",
+]

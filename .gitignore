@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+audit-*/
+result.json
+.pytest_cache/
+.ruff_cache/
+
+# Local fixtures may carry withheld loss values.
+src/gensyn_audit/mocks/
