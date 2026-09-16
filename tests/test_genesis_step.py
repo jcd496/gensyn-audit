@@ -2,9 +2,7 @@
 
 `gs://gensyn-open-1b/ckpt/step_000000000/` holds no objects and never did: the
 run's checkpoints start at 100, and its initial state is regenerated from the
-published seed and committed as `ckpt/state_hash_init.txt`. On 2026-09-14 the
-record offered audit step 0 anyway, and the auditor who took it installed the
-kit, passed preflight and died on an empty prefix.
+published seed and committed as `ckpt/state_hash_init.txt`.
 
 So audit 0 is a from-init interval: the same replay, the same hand-off, the
 same submission, with the start state rebuilt rather than downloaded. These
@@ -20,12 +18,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from gensyn_audit import cli, doctor, fetch
+from gensyn_audit import cli, doctor, fetch, runner
 from gensyn_audit import kit as K
 from gensyn_audit import plan as plan_mod
+from gensyn_audit import progress as progress_mod
 from gensyn_audit import record as recordmod
 from gensyn_audit import verify as verifymod
 from gensyn_audit.errors import AuditError
+from gensyn_audit.outcome import Outcome, classify
 from gensyn_audit.steps import StepRef
 
 INIT_HASH = "16554a1119745f1b9bf4ac60b03226e5e9ca1247a2bd56169cd4c822fd457aed"
@@ -402,3 +402,107 @@ def test_preflight_asks_for_less_disk_than_an_interval(tmp_path):
     genesis = doctor._check_disk(tmp_path, _genesis_unit())
     interval = doctor._check_disk(tmp_path, _genesis_unit(from_init=False))
     assert genesis.note != interval.note
+
+
+# ── the init gate is not the audit's verdict ─────────────────────────────────
+#
+# audit_replay logs `from-init: regenerated init state_hash=… MATCH=True` when
+# it gates the regenerated initialization — before a single step has replayed.
+# Read as the audit's verdict, an initialization success followed by a crash
+# becomes a reported MATCH, exit 0, a "match" receipt with nothing reproduced,
+# and a workdir a rerun refuses to retry. These pin the separation.
+
+INIT_DIGEST = "c" * 64
+TARGET = "d" * 64
+
+_GATE_PASSED = (
+    "2026-09-15 12:00:00,000 INFO pretrain.cli.audit_replay :: "
+    f"from-init: regenerated init state_hash={INIT_DIGEST[:16]} "
+    f"expected={INIT_DIGEST[:16]} MATCH=True\n"
+    "2026-09-15 12:00:00,100 INFO pretrain.cli.audit_replay :: "
+    "from-init: init verified; replaying steps 0 -> 1\n"
+)
+
+
+def test_the_init_gate_passing_is_not_a_verdict():
+    log = _GATE_PASSED + (
+        "Traceback (most recent call last):\nRuntimeError: MPS backend out of memory\n"
+    )
+    p = progress_mod.parse(log)
+    assert p.init_match is True, "the gate itself was seen"
+    assert p.init_state_hash_short == INIT_DIGEST[:16]
+    assert p.match is None, "the audit produced no verdict"
+    assert not p.finished
+    outcome = classify(matched=p.match, exit_code=1)
+    assert outcome is Outcome.INCONCLUSIVE
+    assert outcome.exit_code == 1 and not outcome.advances_record
+
+
+def test_live_status_after_the_gate_shows_progress_not_a_verdict():
+    log = _GATE_PASSED + ("\r  step 1 microbatches:   3%|#    | 9/288 [00:30<15:00,  3.2s/mb]")
+    p = progress_mod.parse(log)
+    assert p.phase == "replaying"
+    assert p.match is None and not p.finished
+    assert p.fraction is not None
+
+
+def test_a_finished_genesis_replay_still_reports_its_verdict():
+    log = _GATE_PASSED + (
+        "2026-09-15 12:10:00,000 INFO pretrain.cli.audit_replay :: replaying steps 0 → 1\n"
+        "2026-09-15 18:00:00,000 INFO pretrain.cli.audit_replay :: "
+        f"state_hash={TARGET[:16]} expected={TARGET[:16]} MATCH=True\n"
+        "{\n"
+        f'  "step": 1,\n  "state_hash": "{TARGET}",\n'
+        f'  "expected": "{TARGET}",\n  "match": true\n'
+        "}\n"
+    )
+    p = progress_mod.parse(log)
+    assert p.match is True and p.phase == "done"
+    assert p.state_hash == TARGET, "the verdict digest is the interval's, not the init's"
+    assert p.init_match is True
+
+
+def test_a_failed_init_gate_is_a_negative_verdict_not_a_crash():
+    """The harness exits through `AUDIT FAILED:` with the full init digests."""
+    log = (
+        "2026-09-15 12:00:00,000 INFO pretrain.cli.audit_replay :: "
+        f"from-init: regenerated init state_hash={INIT_DIGEST[:16]} "
+        f"expected={TARGET[:16]} MATCH=False\n"
+        f"AUDIT FAILED: state_hash {INIT_DIGEST} != {TARGET}\n"
+    )
+    p = progress_mod.parse(log)
+    assert p.init_match is False
+    assert p.match is False and p.phase == "failed"
+    assert classify(matched=p.match, exit_code=1) is Outcome.NO_MATCH
+
+
+def test_a_crashed_genesis_replay_is_rerun_not_reused(tmp_path, monkeypatch):
+    """`run` must start the replay over, not report the crash as a result."""
+    wd = plan_mod.Workdir(tmp_path)
+    wd.root.mkdir(parents=True, exist_ok=True)
+    wd.log.write_text(_GATE_PASSED + "RuntimeError: MPS backend out of memory\n")
+    state = runner.RunState(
+        kit_id="k",
+        kit_prefix="p",
+        run="r",
+        unit_kind="interval",
+        config_name="c",
+        until_step=1,
+        audit_step=0,
+        expect_hash=TARGET,
+        device="mps",
+        pid=999_998,
+        argv=[],
+        env_overlay={},
+        started_at="2026-09-15T12:00:00+00:00",
+        workdir=str(wd.root),
+        detached=True,
+    )
+    runner.save_state(wd, state)
+    assert cli._completed_replay(SimpleNamespace(workdir=wd)) is None
+
+    # The same workdir with a real verdict is finished, and is reused.
+    wd.log.write_text(
+        _GATE_PASSED + f"state_hash={TARGET[:16]} expected={TARGET[:16]} MATCH=True\n"
+    )
+    assert cli._completed_replay(SimpleNamespace(workdir=wd)) is not None

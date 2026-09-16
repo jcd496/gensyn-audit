@@ -1161,6 +1161,27 @@ def _echo_verdict_hashes(
     echo(kv("reproduced", _reproduced_value(prog), _reproduced_note(prog)))
 
 
+def _echo_init_gate(prog: progress_mod.Progress, *, pending: bool = False) -> None:
+    """The from-init gate, when the log carries one.
+
+    A separate line because it is a separate check: the regenerated
+    initialization against the published commitment, before any step replayed.
+    Passing it says nothing about the interval -- the audit's verdict is still
+    whatever the replay itself reports.
+    """
+    if prog.init_match is None:
+        return
+    echo(
+        kv(
+            "init gate",
+            paint("passed", "green") if prog.init_match else paint("failed", "red"),
+            "the audit verdict is separate and still pending"
+            if pending
+            else "regenerated initialization vs the published commitment",
+        )
+    )
+
+
 def _status_block(
     prog: progress_mod.Progress,
     started: float,
@@ -1317,6 +1338,7 @@ def _report(
 
     echo()
     _echo_verdict_hashes(prog, state.expect_hash, step=state.audit_step)
+    _echo_init_gate(prog)
     if outcome is Outcome.NO_MATCH and prog.state_hash:
         diff = submit_mod.divergence(prog.state_hash, state.expect_hash)
         if diff:
@@ -1949,6 +1971,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         echo(kv("process", f"pid {state.pid}" + ("" if alive else " (exited)"), how))
     if state.detached and not alive and prog.match is not None:
         _echo_detached_aftermath(workdir, state, supervised)
+    if prog.match is None:
+        _echo_init_gate(prog, pending=True)
     if prog.fraction is not None and prog.match is None:
         echo(
             kv(
@@ -1970,6 +1994,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if prog.match is not None:
         echo()
         _echo_verdict_hashes(prog, state.expect_hash, step=state.audit_step)
+        _echo_init_gate(prog)
         if state.detached:
             if args.follow:
                 _follow_supervisor(workdir, state)

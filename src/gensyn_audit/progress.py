@@ -13,6 +13,10 @@ wrong answer:
   `AUDIT FAILED:` line on failure. Never report the truncated one as the hash.
 * tqdm writes with carriage returns, so the newest bar is the last `\\r`-
   separated field of the last line -- not the last line.
+* A from-init replay logs `from-init: regenerated init state_hash=... MATCH=True`
+  when it gates the regenerated initialization -- before a single step has
+  replayed. That is the gate's verdict, never the audit's: a crash after it
+  must read as no verdict, not as a match.
 """
 
 from __future__ import annotations
@@ -29,9 +33,18 @@ _LOG_LINE = re.compile(
     r"^(?P<time>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+\s+(?P<level>\w+)\s+\S+\s+::\s+(?P<msg>.*)$"
 )
 
-_REPLAYING = re.compile(r"replaying steps (\d+) . (\d+)")
+#: The from-init announcement spells its arrow `->`; the replay loop's own
+#: line spells it `→`. Both mean the replay has started.
+_REPLAYING = re.compile(r"replaying steps (\d+) (?:.|->) (\d+)")
 _MATCH = re.compile(
     r"state_hash=(?P<got>[0-9a-f]+) expected=(?P<want>[0-9a-f]+) MATCH=(?P<match>True|False)"
+)
+#: The gate on a regenerated start state. `expected` is `none` on a run with no
+#: published commitment, and MATCH is then `None` -- shapes `_MATCH` never sees.
+_INIT_GATE = re.compile(
+    r"from-init: regenerated init "
+    r"state_hash=(?P<got>[0-9a-f]+) expected=(?P<want>[0-9a-f]+|none) "
+    r"MATCH=(?P<match>True|False|None)"
 )
 _FAILED = re.compile(r"AUDIT FAILED: state_hash (?P<got>[0-9a-f]{64}) != (?P<want>[0-9a-f]{64})")
 _MEMLOG = re.compile(
@@ -72,6 +85,13 @@ class Progress:
     expected_hash: str | None = None
     state_hash_short: str | None = None
     expected_hash_short: str | None = None
+
+    init_match: bool | None = None
+    """The from-init gate: the regenerated initialization against the published
+    init commitment, checked before the interval replays. Never the audit's
+    verdict -- `match` stays None until the replay itself reports."""
+    init_state_hash_short: str | None = None
+    init_expected_hash_short: str | None = None
 
     mode: str | None = None
     """``init`` for a config-only init audit; absent for an interval replay."""
@@ -180,7 +200,15 @@ def parse(text: str) -> Progress:
             p.host_rss_gb = float(m["rss"])
             if m["alloc"]:
                 p.mps_alloc_gb, p.mps_driver_gb = float(m["alloc"]), float(m["driver"])
-        if m := _MATCH.search(msg):
+        if m := _INIT_GATE.search(msg):
+            # The gate on the regenerated start state shares the MATCH= shape
+            # with the verdict line, so it must be claimed first: reading it as
+            # the audit's verdict turns an initialization success followed by a
+            # crash into a reported match with nothing reproduced.
+            p.init_state_hash_short = m["got"]
+            p.init_expected_hash_short = None if m["want"] == "none" else m["want"]
+            p.init_match = None if m["match"] == "None" else m["match"] == "True"
+        elif m := _MATCH.search(msg):
             p.state_hash_short, p.expected_hash_short = m["got"], m["want"]
             p.match = m["match"] == "True"
             p.phase = "done" if p.match else "failed"
